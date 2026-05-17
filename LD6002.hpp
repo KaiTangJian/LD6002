@@ -2,7 +2,6 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: LD6002 radar driver and LibXR service module
-module_type: LD6002::Module
 constructor_args: []
 template_args: []
 required_hardware:
@@ -22,7 +21,7 @@ depends: []
 #include "timebase.hpp"
 #include "uart.hpp"
 
-namespace LD6002
+namespace ld6002_detail
 {
 
 inline constexpr uint8_t SOF = 0x01U;
@@ -1331,4 +1330,50 @@ inline const Service& Module::GetService() const
   return service_;
 }
 
-}  // namespace LD6002
+}  // namespace ld6002_detail
+
+class LD6002 : public ld6002_detail::Module
+{
+ public:
+  using Module = ld6002_detail::Module;
+  using Version = ld6002_detail::Version;
+  using Frame = ld6002_detail::Frame;
+  using Driver = ld6002_detail::Driver;
+  using ServiceParseResult = ld6002_detail::ServiceParseResult;
+  using ServiceEventKind = ld6002_detail::ServiceEventKind;
+  using ServicePresenceState = ld6002_detail::ServicePresenceState;
+  using ServiceOta = ld6002_detail::ServiceOta;
+  using ServiceText = ld6002_detail::ServiceText;
+  using ServicePresence = ld6002_detail::ServicePresence;
+  using ServiceRate = ld6002_detail::ServiceRate;
+  using ServiceTargetRange = ld6002_detail::ServiceTargetRange;
+  using ServiceTrackPosition = ld6002_detail::ServiceTrackPosition;
+  using ServicePhaseTest = ld6002_detail::ServicePhaseTest;
+  using ServicePersonTarget = ld6002_detail::ServicePersonTarget;
+  using ServicePersonnelPosition = ld6002_detail::ServicePersonnelPosition;
+  using ServiceEvent = ld6002_detail::ServiceEvent;
+  using ServiceSnapshot = ld6002_detail::ServiceSnapshot;
+  using Service = ld6002_detail::Service;
+  using EventListener = Module::EventListener;
+
+  static constexpr uint8_t SOF = ld6002_detail::SOF;
+  static constexpr size_t MAX_PAYLOAD_LEN = ld6002_detail::MAX_PAYLOAD_LEN;
+  static constexpr uint16_t VERSION_QUERY_TYPE = ld6002_detail::VERSION_QUERY_TYPE;
+  static constexpr uint16_t TYPE_FIRMWARE_STATUS = ld6002_detail::TYPE_FIRMWARE_STATUS;
+  static constexpr uint16_t TYPE_OTA = ld6002_detail::TYPE_OTA;
+  static constexpr uint16_t TYPE_TEXT_MESSAGE = ld6002_detail::TYPE_TEXT_MESSAGE;
+  static constexpr uint16_t TYPE_HUMAN_PRESENCE = ld6002_detail::TYPE_HUMAN_PRESENCE;
+  static constexpr uint16_t TYPE_PERSONNEL_POSITION = ld6002_detail::TYPE_PERSONNEL_POSITION;
+  static constexpr uint16_t TYPE_PHASE_TEST = ld6002_detail::TYPE_PHASE_TEST;
+  static constexpr uint16_t TYPE_BREATH_RATE = ld6002_detail::TYPE_BREATH_RATE;
+  static constexpr uint16_t TYPE_HEART_RATE = ld6002_detail::TYPE_HEART_RATE;
+  static constexpr uint16_t TYPE_TARGET_RANGE = ld6002_detail::TYPE_TARGET_RANGE;
+  static constexpr uint16_t TYPE_TRACK_POSITION = ld6002_detail::TYPE_TRACK_POSITION;
+  static constexpr size_t SERVICE_MAX_PERSON_TARGETS = ld6002_detail::SERVICE_MAX_PERSON_TARGETS;
+  static constexpr const char* kRequiredUartAlias = Module::kRequiredUartAlias;
+
+  explicit LD6002(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& appmgr)
+      : Module(hw, appmgr)
+  {
+  }
+};
