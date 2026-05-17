@@ -2,6 +2,7 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: LD6002 radar driver and LibXR service module
+module_type: LD6002::Module
 constructor_args: []
 template_args: []
 required_hardware:

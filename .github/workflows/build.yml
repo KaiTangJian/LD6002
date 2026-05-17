@@ -83,9 +83,9 @@ jobs:
         run: |
           xrobot_add_mod ${{ env.XR_MODULE_NAME }} && cat User/xrobot.yaml
 
-      - name: Generate main again
+      - name: Generate main with module_type support
         run: |
-          xrobot_setup
+          python3 Modules/${{ env.XR_MODULE_NAME }}/scripts/xrobot_gen_main_compat.py --output User/xrobot_main.hpp
 
       - name: Build
         run: |

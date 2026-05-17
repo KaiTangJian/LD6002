@@ -4,7 +4,8 @@ libxr-based LD6002 frame parser and service decoder.
 
 ## Module
 
-- Type: `LD6002::Module`
+- C++ type: `LD6002::Module`
+- Manifest `module_type`: `LD6002::Module`
 - Required hardware alias: `ld6002_uart`
 
 ## Usage
