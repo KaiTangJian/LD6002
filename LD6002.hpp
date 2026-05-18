@@ -20,7 +20,7 @@ depends: []
 #include "timebase.hpp"
 #include "uart.hpp"
 
-class LD6002
+class LD6002 : public LibXR::Application
 {
  public:
   static constexpr const char* kRequiredUartAlias = "ld6002_uart";
@@ -219,6 +219,12 @@ class LD6002
   {
   }
 
+  explicit LD6002(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& appmgr) : LD6002(hw)
+  {
+    (void)Init();
+    appmgr.Register(*this);
+  }
+
   LibXR::ErrorCode Init()
   {
     ResetState();
@@ -297,6 +303,11 @@ class LD6002
         FeedByte(rx_buffer[i]);
       }
     }
+  }
+
+  void OnMonitor() override
+  {
+    Poll();
   }
 
   void ResetState()
