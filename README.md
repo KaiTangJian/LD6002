@@ -1,31 +1,40 @@
 # LD6002
 
-libxr-based LD6002 frame parser and service decoder.
+libxr-based LD6002 single-class driver and frame decoder.
 
-## Module
+## Driver
 
 - C++ type: `LD6002`
-- Compatibility alias: `LD6002::Module`
 - Required hardware alias: `ld6002_uart`
 
 ## Usage
 
-Add the module to your module list:
+Construct `LD6002` with either:
 
-```yaml
-modules:
-  - xrobot-org/LD6002
+- `LibXR::HardwareContainer&` and alias `ld6002_uart`
+- `LibXR::UART&`
+- `LD6002::Config`
+
+Typical polling usage:
+
+```cpp
+LD6002 ld6002(hw);
+(void)ld6002.Init();
+
+while (true)
+{
+  ld6002.Poll();
+
+  LD6002::Event event = {};
+  while (ld6002.PopEvent(event))
+  {
+    // consume decoded events
+  }
+}
 ```
 
-Create an instance in `xrobot.yaml` and bind the UART alias:
+Key API notes:
 
-```yaml
-instances:
-  - name: ld6002
-    module: LD6002
-    required_hardware:
-      ld6002_uart: uart2
-```
-
-The target project must already provide the LibXR module runtime and a UART device
-that can be bound to `ld6002_uart`.
+- `Init()` performs explicit driver startup and optional version query.
+- `Poll()` drains UART bytes and updates internal parser/state.
+- `GetStatus()` exposes initialization, queue, and online-state information.

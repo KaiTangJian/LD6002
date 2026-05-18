@@ -6,9 +6,6 @@ on:
   schedule:
     - cron: '0 3 1 * *'  # 每月1日凌晨3点（UTC）自动触发
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,6 +23,7 @@ jobs:
           path: Modules/${{ env.XR_MODULE_NAME }}
 
       - name: Create main.cpp
+      
         run: |
           cat > main.cpp <<'EOF'
           #include <iostream>
@@ -98,7 +96,7 @@ jobs:
           make
 
       - name: Create Tag via GitHub API
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ success() && github.event_name != 'pull_request' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
