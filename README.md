@@ -9,32 +9,27 @@ libxr-based LD6002 single-class driver and frame decoder.
 
 ## Usage
 
-Construct `LD6002` with either:
-
-- `LibXR::HardwareContainer&` and alias `ld6002_uart`
-- `LibXR::UART&`
-- `LD6002::Config`
-
-Typical polling usage:
+Construct `LD6002` with `LibXR::HardwareContainer&`.
+The module resolves `ld6002_uart` in the constructor, starts its internal worker thread,
+consumes the DMA-backed UART queue there, and publishes parsed outputs through topics.
 
 ```cpp
-LD6002 ld6002(hw);
-(void)ld6002.Init();
+LD6002 ld6002(hw, LD6002::Config{});
+LibXR::LockFreeQueue<LibXR::Topic::Message<LD6002::Event>> event_queue(16);
+LibXR::Topic::QueuedSubscriber event_subscriber(ld6002.EventTopic(), event_queue);
 
 while (true)
 {
-  ld6002.Poll();
-
-  LD6002::Event event = {};
-  while (ld6002.PopEvent(event))
+  LibXR::Topic::Message<LD6002::Event> message = {};
+  while (event_queue.Pop(message) == LibXR::ErrorCode::OK)
   {
-    // consume decoded events
+    // consume decoded events in application layer
   }
 }
 ```
 
 Key API notes:
 
-- `Init()` performs explicit driver startup and optional version query.
-- `Poll()` drains UART bytes and updates internal parser/state.
-- `GetStatus()` exposes initialization, queue, and online-state information.
+- The constructor performs topic setup, optional version query, and worker-thread startup.
+- `Reset()` resets the parser/transport worker state only.
+- Runtime timestamps, online heuristics, aggregation, and history are application-layer concerns.

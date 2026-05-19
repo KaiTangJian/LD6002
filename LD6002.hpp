@@ -1,4 +1,3 @@
-#pragma once
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: LD6002 radar driver
@@ -10,20 +9,37 @@ depends: []
 === END MANIFEST === */
 // clang-format on
 
+#pragma once
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 #include "app_framework.hpp"
+#include "libxr_mem.hpp"
 #include "libxr_rw.hpp"
+#include "message.hpp"
 #include "semaphore.hpp"
+#include "thread.hpp"
 #include "timebase.hpp"
 #include "uart.hpp"
 
-class LD6002 : public LibXR::Application
+class LD6002
 {
  public:
-  static constexpr const char* kRequiredUartAlias = "ld6002_uart";
+  static constexpr const char* REQUIRED_UART_ALIAS = "ld6002_uart";
+
+  static constexpr const char* FRAME_TOPIC_NAME = "/ld6002/frame";
+  static constexpr const char* EVENT_TOPIC_NAME = "/ld6002/event";
+  static constexpr const char* VERSION_TOPIC_NAME = "/ld6002/firmware_status";
+  static constexpr const char* TEXT_TOPIC_NAME = "/ld6002/text_message";
+  static constexpr const char* PRESENCE_TOPIC_NAME = "/ld6002/human_presence";
+  static constexpr const char* BREATH_RATE_TOPIC_NAME = "/ld6002/breath_rate";
+  static constexpr const char* HEART_RATE_TOPIC_NAME = "/ld6002/heart_rate";
+  static constexpr const char* TARGET_RANGE_TOPIC_NAME = "/ld6002/target_range";
+  static constexpr const char* TRACK_POSITION_TOPIC_NAME = "/ld6002/track_position";
+  static constexpr const char* PHASE_TEST_TOPIC_NAME = "/ld6002/phase_test";
+  static constexpr const char* PERSONNEL_POSITION_TOPIC_NAME = "/ld6002/personnel_position";
 
   static constexpr uint8_t SOF = 0x01U;
   static constexpr size_t MAX_PAYLOAD_LEN = 128U;
@@ -40,7 +56,6 @@ class LD6002 : public LibXR::Application
   static constexpr uint16_t TYPE_HEART_RATE = 0x0A15U;
   static constexpr uint16_t TYPE_TARGET_RANGE = 0x0A16U;
   static constexpr uint16_t TYPE_TRACK_POSITION = 0x0A17U;
-  static constexpr uint32_t kDefaultOnlineTimeoutMs = 1000U;
 
   struct Version
   {
@@ -153,180 +168,66 @@ class LD6002 : public LibXR::Application
     } data = {};
   };
 
-  struct Snapshot
-  {
-    bool has_firmware_status = false;
-    Version firmware_status = {};
-    bool has_ota_message = false;
-    size_t ota_payload_len = 0;
-    bool has_text_message = false;
-    char text_message[MAX_PAYLOAD_LEN + 1U] = {0};
-    bool has_presence = false;
-    Presence presence = {};
-    bool has_breath_rate = false;
-    float breath_rate_bpm = 0.0f;
-    bool has_heart_rate = false;
-    float heart_rate_bpm = 0.0f;
-    bool has_target_range = false;
-    TargetRange target_range = {};
-    bool has_track_position = false;
-    TrackPosition track_position = {};
-    bool has_phase_test = false;
-    PhaseTest phase_test = {};
-    bool has_personnel_position = false;
-    PersonnelPosition personnel_position = {};
-  };
-
   struct Config
   {
-    LibXR::UART* uart = nullptr;
     uint32_t uart_read_timeout_ms = 0;
     uint32_t parser_timeout_ms = 50;
+    size_t worker_stack_depth = 1024;
+    LibXR::Thread::Priority worker_priority = LibXR::Thread::Priority::MEDIUM;
     bool auto_reply_version = false;
     bool request_version_on_init = true;
     Version local_version = {0, 1, 0, 0};
   };
 
-  struct Status
+  LD6002(LibXR::HardwareContainer& hw, Config config = {})
+      : uart_(*hw.FindOrExit<LibXR::UART>({REQUIRED_UART_ALIAS})),
+        config_(config),
+        frame_topic_(LibXR::Topic::FindOrCreate<Frame>(FRAME_TOPIC_NAME, nullptr, false, false,
+                                                       true)),
+        event_topic_(LibXR::Topic::FindOrCreate<Event>(EVENT_TOPIC_NAME, nullptr, false, false,
+                                                       true)),
+        version_topic_(LibXR::Topic::FindOrCreate<Version>(VERSION_TOPIC_NAME, nullptr, false,
+                                                           false, true)),
+        text_topic_(LibXR::Topic::FindOrCreate<EventText>(TEXT_TOPIC_NAME, nullptr, false, false,
+                                                          true)),
+        presence_topic_(LibXR::Topic::FindOrCreate<Presence>(PRESENCE_TOPIC_NAME, nullptr, false,
+                                                             false, true)),
+        breath_rate_topic_(LibXR::Topic::FindOrCreate<FloatValue>(BREATH_RATE_TOPIC_NAME, nullptr,
+                                                                  false, false, true)),
+        heart_rate_topic_(LibXR::Topic::FindOrCreate<FloatValue>(HEART_RATE_TOPIC_NAME, nullptr,
+                                                                 false, false, true)),
+        target_range_topic_(LibXR::Topic::FindOrCreate<TargetRange>(TARGET_RANGE_TOPIC_NAME,
+                                                                    nullptr, false, false,
+                                                                    true)),
+        track_position_topic_(LibXR::Topic::FindOrCreate<TrackPosition>(TRACK_POSITION_TOPIC_NAME,
+                                                                        nullptr, false, false,
+                                                                        true)),
+        phase_test_topic_(LibXR::Topic::FindOrCreate<PhaseTest>(PHASE_TEST_TOPIC_NAME, nullptr,
+                                                                false, false, true)),
+        personnel_position_topic_(
+            LibXR::Topic::FindOrCreate<PersonnelPosition>(PERSONNEL_POSITION_TOPIC_NAME, nullptr,
+                                                          false, false, true))
   {
-    bool has_uart = false;
-    bool has_last_frame = false;
-    bool has_last_event = false;
-    bool has_pending_event = false;
-    bool online = false;
-    size_t pending_event_count = 0;
-    LibXR::MicrosecondTimestamp last_rx_timestamp = {};
-    LibXR::MicrosecondTimestamp last_frame_timestamp = {};
-  };
-
-  explicit LD6002(const Config& config) : config_(config)
-  {
-    ResetRuntimeState();
-    ResetParserState();
-  }
-
-  explicit LD6002(LibXR::UART& uart) : LD6002([&]() {
-    Config config = {};
-    config.uart = &uart;
-    return config;
-  }())
-  {
-  }
-
-  explicit LD6002(LibXR::HardwareContainer& hw) : LD6002(*hw.FindOrExit<LibXR::UART>({
-    kRequiredUartAlias
-  }))
-  {
-  }
-
-  explicit LD6002(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& appmgr) : LD6002(hw)
-  {
-    (void)Init();
-    appmgr.Register(*this);
-  }
-
-  LibXR::ErrorCode Init()
-  {
-    ResetState();
-    if (!HasUart())
+    Reset();
+    if (config_.request_version_on_init)
     {
-      return LibXR::ErrorCode::STATE_ERR;
+      const auto ans = RequestVersion();
+      ASSERT(ans == LibXR::ErrorCode::OK);
     }
 
-    if (!config_.request_version_on_init)
-    {
-      return LibXR::ErrorCode::OK;
-    }
-
-    return RequestVersion();
+    worker_thread_.Create(this, WorkerThreadFun, "ld6002", config_.worker_stack_depth,
+                          config_.worker_priority);
   }
 
-  bool HasUart() const
+  void Reset()
   {
-    return config_.uart != nullptr;
-  }
-
-  const Config& GetConfig() const
-  {
-    return config_;
-  }
-
-  Status GetStatus(uint32_t online_timeout_ms = kDefaultOnlineTimeoutMs) const
-  {
-    Status status = {};
-    status.has_uart = HasUart();
-    status.has_last_frame = has_last_frame_;
-    status.has_last_event = has_last_event_;
-    status.has_pending_event = (event_queue_size_ != 0U);
-    status.online = IsOnline(online_timeout_ms);
-    status.pending_event_count = event_queue_size_;
-    status.last_rx_timestamp = last_rx_us_;
-    status.last_frame_timestamp = last_frame_us_;
-    return status;
-  }
-
-  bool IsOnline(uint32_t stale_timeout_ms = kDefaultOnlineTimeoutMs) const
-  {
-    if (!HasUart() || !has_last_frame_)
-    {
-      return false;
-    }
-
-    if ((stale_timeout_ms == 0U) || (LibXR::Timebase::timebase == nullptr))
-    {
-      return true;
-    }
-
-    return ((LibXR::Timebase::GetMicroseconds() - last_frame_us_).ToMillisecond() <=
-            stale_timeout_ms);
-  }
-
-  void Poll()
-  {
-    if (config_.uart == nullptr)
-    {
-      return;
-    }
-
-    uint8_t rx_buffer[kPollChunkSize] = {0};
-    while (true)
-    {
-      const size_t read_size =
-          ReadAvailableBytes(*config_.uart, rx_buffer, sizeof(rx_buffer), config_.uart_read_timeout_ms);
-      if (read_size == 0U)
-      {
-        return;
-      }
-
-      for (size_t i = 0; i < read_size; ++i)
-      {
-        FeedByte(rx_buffer[i]);
-      }
-    }
-  }
-
-  void OnMonitor() override
-  {
-    Poll();
-  }
-
-  void ResetState()
-  {
-    ResetRuntimeState();
-    ResetParserState();
-  }
-
-  void ResetParser()
-  {
-    ResetParserState();
+    next_id_ = 0;
+    ClearParserState();
+    payload_frame_ = Frame{};
   }
 
   LibXR::ErrorCode SendFrame(uint16_t type, const void* payload, size_t payload_len)
   {
-    if (config_.uart == nullptr)
-    {
-      return LibXR::ErrorCode::STATE_ERR;
-    }
     if ((payload_len > 0U) && (payload == nullptr))
     {
       return LibXR::ErrorCode::ARG_ERR;
@@ -376,7 +277,7 @@ class LD6002 : public LibXR::Application
 
     LibXR::Semaphore sem(0);
     LibXR::WriteOperation op(sem, 20);
-    return config_.uart->Write(LibXR::ConstRawData(frame, frame_len), op);
+    return uart_.Write(LibXR::ConstRawData(frame, frame_len), op);
   }
 
   LibXR::ErrorCode RequestVersion()
@@ -384,62 +285,30 @@ class LD6002 : public LibXR::Application
     return SendFrame(VERSION_QUERY_TYPE, kVersionQueryPayload, sizeof(kVersionQueryPayload));
   }
 
-  bool GetSnapshot(Snapshot& out_snapshot) const
-  {
-    if (config_.uart == nullptr)
-    {
-      return false;
-    }
-
-    out_snapshot = snapshot_;
-    return true;
-  }
-
-  bool GetLastFrame(Frame& out_frame) const
-  {
-    if (!has_last_frame_)
-    {
-      return false;
-    }
-
-    out_frame = last_frame_;
-    return true;
-  }
-
-  bool GetLastEvent(Event& out_event) const
-  {
-    if (!has_last_event_)
-    {
-      return false;
-    }
-
-    out_event = last_event_;
-    return true;
-  }
-
-  bool PopEvent(Event& out_event)
-  {
-    if (event_queue_size_ == 0U)
-    {
-      return false;
-    }
-
-    out_event = event_queue_[event_queue_tail_];
-    event_queue_tail_ = (event_queue_tail_ + 1U) % kEventQueueCapacity;
-    event_queue_size_--;
-    return true;
-  }
+  LibXR::Topic FrameTopic() const { return frame_topic_; }
+  LibXR::Topic EventTopic() const { return event_topic_; }
+  LibXR::Topic VersionTopic() const { return version_topic_; }
+  LibXR::Topic TextTopic() const { return text_topic_; }
+  LibXR::Topic PresenceTopic() const { return presence_topic_; }
+  LibXR::Topic BreathRateTopic() const { return breath_rate_topic_; }
+  LibXR::Topic HeartRateTopic() const { return heart_rate_topic_; }
+  LibXR::Topic TargetRangeTopic() const { return target_range_topic_; }
+  LibXR::Topic TrackPositionTopic() const { return track_position_topic_; }
+  LibXR::Topic PhaseTestTopic() const { return phase_test_topic_; }
+  LibXR::Topic PersonnelPositionTopic() const { return personnel_position_topic_; }
 
   static bool IsVersionQuery(const Frame& frame)
   {
     return (frame.type == VERSION_QUERY_TYPE) &&
            (frame.len == sizeof(kVersionQueryPayload)) &&
-           (std::memcmp(frame.data, kVersionQueryPayload, sizeof(kVersionQueryPayload)) == 0);
+           (LibXR::Memory::FastCmp(frame.data, kVersionQueryPayload,
+                                   sizeof(kVersionQueryPayload)) == 0);
   }
 
   static bool ParseVersionResponse(const Frame& frame, Version& out_version)
   {
-    if ((frame.type != VERSION_QUERY_TYPE) || (frame.len != sizeof(Version)) || IsVersionQuery(frame))
+    if ((frame.type != VERSION_QUERY_TYPE) || (frame.len != sizeof(Version)) ||
+        IsVersionQuery(frame))
     {
       return false;
     }
@@ -448,33 +317,6 @@ class LD6002 : public LibXR::Application
     out_version.version_major = frame.data[1];
     out_version.version_minor = frame.data[2];
     out_version.version_patch = frame.data[3];
-    return true;
-  }
-
-  static bool ParseU32LE(const Frame& frame, uint32_t& out_value)
-  {
-    if (frame.len != 4U)
-    {
-      return false;
-    }
-
-    out_value = static_cast<uint32_t>(frame.data[0]) |
-                (static_cast<uint32_t>(frame.data[1]) << 8U) |
-                (static_cast<uint32_t>(frame.data[2]) << 16U) |
-                (static_cast<uint32_t>(frame.data[3]) << 24U);
-    return true;
-  }
-
-  static bool ParseFloatLE(const Frame& frame, float& out_value)
-  {
-    uint32_t raw = 0;
-    if (!ParseU32LE(frame, raw))
-    {
-      return false;
-    }
-
-    static_assert(sizeof(raw) == sizeof(out_value));
-    std::memcpy(&out_value, &raw, sizeof(raw));
     return true;
   }
 
@@ -733,6 +575,16 @@ class LD6002 : public LibXR::Application
   }
 
  private:
+  struct FloatValue
+  {
+    float value = 0.0f;
+  };
+
+  struct EventText
+  {
+    char text[MAX_PAYLOAD_LEN + 1U] = {0};
+  };
+
   enum class ParserState : uint8_t
   {
     WAIT_SOF = 0,
@@ -746,11 +598,55 @@ class LD6002 : public LibXR::Application
 
   static constexpr uint8_t kVersionQueryPayload[4] = {0x01, 0x01, 0x00, 0x00};
   static constexpr size_t kFrameOverhead = 9U;
-  static constexpr size_t kPollChunkSize = 64U;
-  static constexpr size_t kEventQueueCapacity = 16U;
+  static constexpr size_t kReadChunkSize = 64U;
 
-  static size_t ReadAvailableBytes(LibXR::UART& uart, uint8_t* buffer, size_t capacity,
-                                   uint32_t timeout_ms)
+  static void WorkerThreadFun(LD6002* self)
+  {
+    ASSERT(self != nullptr);
+    while (true)
+    {
+      self->RunWorkerLoop();
+    }
+  }
+
+  void RunWorkerLoop()
+  {
+    if (!WaitForReadable())
+    {
+      return;
+    }
+
+    uint8_t rx_buffer[kReadChunkSize] = {0};
+    while (true)
+    {
+      const size_t read_size = ReadAvailableBytes(uart_, rx_buffer, sizeof(rx_buffer));
+      if (read_size == 0U)
+      {
+        return;
+      }
+
+      for (size_t i = 0; i < read_size; ++i)
+      {
+        FeedByte(rx_buffer[i]);
+      }
+    }
+  }
+
+  bool WaitForReadable()
+  {
+    LibXR::Semaphore sem(0);
+    LibXR::ReadOperation op(sem, UartReadTimeoutMs());
+    const auto ans = uart_.Read(LibXR::RawData(nullptr, 0U), op);
+    ASSERT((ans == LibXR::ErrorCode::OK) || (ans == LibXR::ErrorCode::TIMEOUT));
+    return ans == LibXR::ErrorCode::OK;
+  }
+
+  uint32_t UartReadTimeoutMs() const
+  {
+    return (config_.uart_read_timeout_ms == 0U) ? UINT32_MAX : config_.uart_read_timeout_ms;
+  }
+
+  static size_t ReadAvailableBytes(LibXR::UART& uart, uint8_t* buffer, size_t capacity)
   {
     if ((buffer == nullptr) || (capacity == 0U))
     {
@@ -764,8 +660,9 @@ class LD6002 : public LibXR::Application
     }
 
     const size_t take = (available < capacity) ? available : capacity;
-    LibXR::Semaphore sem(0);
-    LibXR::ReadOperation op(sem, timeout_ms);
+    LibXR::ReadOperation::OperationPollingStatus status =
+        LibXR::ReadOperation::OperationPollingStatus::READY;
+    LibXR::ReadOperation op(status);
     const auto ans = uart.Read(LibXR::RawData(buffer, take), op);
     return (ans == LibXR::ErrorCode::OK) ? take : 0U;
   }
@@ -814,7 +711,7 @@ class LD6002 : public LibXR::Application
   {
     const uint32_t raw = ReadU32LE(data);
     float value = 0.0f;
-    std::memcpy(&value, &raw, sizeof(value));
+    LibXR::Memory::FastCopy(&value, &raw, sizeof(value));
     return value;
   }
 
@@ -831,7 +728,7 @@ class LD6002 : public LibXR::Application
       copy_len = out_size - 1U;
     }
 
-    std::memcpy(out_text, frame.data, copy_len);
+    LibXR::Memory::FastCopy(out_text, frame.data, copy_len);
     out_text[copy_len] = '\0';
 
     while (copy_len > 0U)
@@ -851,7 +748,8 @@ class LD6002 : public LibXR::Application
     switch (frame.type)
     {
       case TYPE_FIRMWARE_STATUS:
-        return IsVersionQuery(frame) ? EventKind::FIRMWARE_STATUS_QUERY : EventKind::FIRMWARE_STATUS;
+        return IsVersionQuery(frame) ? EventKind::FIRMWARE_STATUS_QUERY
+                                     : EventKind::FIRMWARE_STATUS;
       case TYPE_OTA:
         return EventKind::OTA;
       case TYPE_TEXT_MESSAGE:
@@ -875,28 +773,7 @@ class LD6002 : public LibXR::Application
     }
   }
 
-  void ResetRuntimeState()
-  {
-    next_id_ = 0;
-    has_last_frame_ = false;
-    has_last_event_ = false;
-    last_rx_us_ = LibXR::MicrosecondTimestamp();
-    last_frame_us_ = LibXR::MicrosecondTimestamp();
-    payload_frame_ = Frame{};
-    last_frame_ = Frame{};
-    snapshot_ = Snapshot{};
-    last_event_ = Event{};
-
-    for (size_t i = 0; i < kEventQueueCapacity; ++i)
-    {
-      event_queue_[i] = Event{};
-    }
-    event_queue_head_ = 0;
-    event_queue_tail_ = 0;
-    event_queue_size_ = 0;
-  }
-
-  void ResetParserState()
+  void ClearParserState()
   {
     state_ = ParserState::WAIT_SOF;
     current_id_ = 0;
@@ -911,39 +788,7 @@ class LD6002 : public LibXR::Application
     last_byte_us_ = LibXR::MicrosecondTimestamp();
   }
 
-  bool StoreFrame(uint16_t id, uint16_t type, uint16_t len, const uint8_t* payload)
-  {
-    if (len > MAX_PAYLOAD_LEN)
-    {
-      return false;
-    }
-
-    last_frame_.id = id;
-    last_frame_.type = type;
-    last_frame_.len = len;
-    if (len > 0U)
-    {
-      std::memcpy(last_frame_.data, payload, len);
-    }
-
-    has_last_frame_ = true;
-    return true;
-  }
-
-  void PushEvent(const Event& event)
-  {
-    if (event_queue_size_ == kEventQueueCapacity)
-    {
-      event_queue_tail_ = (event_queue_tail_ + 1U) % kEventQueueCapacity;
-      event_queue_size_--;
-    }
-
-    event_queue_[event_queue_head_] = event;
-    event_queue_head_ = (event_queue_head_ + 1U) % kEventQueueCapacity;
-    event_queue_size_++;
-  }
-
-  void UpdateSnapshot(const Event& event)
+  void PublishTypedData(const Event& event, LibXR::MicrosecondTimestamp timestamp)
   {
     if (event.result != ParseResult::OK)
     {
@@ -953,68 +798,100 @@ class LD6002 : public LibXR::Application
     switch (event.kind)
     {
       case EventKind::FIRMWARE_STATUS:
-        snapshot_.has_firmware_status = true;
-        snapshot_.firmware_status = event.data.firmware_status;
+      {
+        Version version = event.data.firmware_status;
+        version_topic_.Publish(version, timestamp);
         break;
-      case EventKind::OTA:
-        snapshot_.has_ota_message = true;
-        snapshot_.ota_payload_len = event.data.ota_payload_len;
-        break;
+      }
+
       case EventKind::TEXT_MESSAGE:
-        snapshot_.has_text_message = true;
-        std::memcpy(snapshot_.text_message, event.data.text, sizeof(snapshot_.text_message));
+      {
+        EventText text = {};
+        LibXR::Memory::FastCopy(text.text, event.data.text, sizeof(text.text));
+        text_topic_.Publish(text, timestamp);
         break;
+      }
+
       case EventKind::HUMAN_PRESENCE:
-        snapshot_.has_presence = true;
-        snapshot_.presence = event.data.presence;
+      {
+        Presence presence = event.data.presence;
+        presence_topic_.Publish(presence, timestamp);
         break;
+      }
+
       case EventKind::BREATH_RATE:
-        snapshot_.has_breath_rate = true;
-        snapshot_.breath_rate_bpm = event.data.breath_rate_bpm;
+      {
+        FloatValue breath = {event.data.breath_rate_bpm};
+        breath_rate_topic_.Publish(breath, timestamp);
         break;
+      }
+
       case EventKind::HEART_RATE:
-        snapshot_.has_heart_rate = true;
-        snapshot_.heart_rate_bpm = event.data.heart_rate_bpm;
+      {
+        FloatValue heart = {event.data.heart_rate_bpm};
+        heart_rate_topic_.Publish(heart, timestamp);
         break;
+      }
+
       case EventKind::TARGET_RANGE:
-        snapshot_.has_target_range = true;
-        snapshot_.target_range = event.data.target_range;
+      {
+        TargetRange target_range = event.data.target_range;
+        target_range_topic_.Publish(target_range, timestamp);
         break;
+      }
+
       case EventKind::TRACK_POSITION:
-        snapshot_.has_track_position = true;
-        snapshot_.track_position = event.data.track_position;
+      {
+        TrackPosition track_position = event.data.track_position;
+        track_position_topic_.Publish(track_position, timestamp);
         break;
+      }
+
       case EventKind::PHASE_TEST:
-        snapshot_.has_phase_test = true;
-        snapshot_.phase_test = event.data.phase_test;
+      {
+        PhaseTest phase_test = event.data.phase_test;
+        phase_test_topic_.Publish(phase_test, timestamp);
         break;
+      }
+
       case EventKind::PERSONNEL_POSITION:
-        snapshot_.has_personnel_position = true;
-        snapshot_.personnel_position = event.data.personnel_position;
+      {
+        PersonnelPosition personnel_position = event.data.personnel_position;
+        personnel_position_topic_.Publish(personnel_position, timestamp);
         break;
+      }
+
       case EventKind::FIRMWARE_STATUS_QUERY:
+      case EventKind::OTA:
       case EventKind::UNKNOWN:
+      default:
         break;
     }
   }
 
-  void RecordEvent(const Event& event)
+  void PublishFrameAndEvent(Frame& frame, Event& event, LibXR::MicrosecondTimestamp timestamp)
   {
-    last_event_ = event;
-    has_last_event_ = true;
-    UpdateSnapshot(event);
-    PushEvent(event);
+    frame_topic_.Publish(frame, timestamp);
+    event_topic_.Publish(event, timestamp);
+    PublishTypedData(event, timestamp);
   }
 
-  void HandleFrame()
+  void HandleFrame(uint16_t id, uint16_t type, uint16_t len, const uint8_t* payload)
   {
-    if (!StoreFrame(current_id_, current_type_, current_len_, payload_frame_.data))
+    if (len > MAX_PAYLOAD_LEN)
     {
       return;
     }
 
-    last_frame_us_ = LibXR::Timebase::GetMicroseconds();
-    const Frame frame = last_frame_;
+    Frame frame = {};
+    frame.id = id;
+    frame.type = type;
+    frame.len = len;
+    if (len > 0U)
+    {
+      LibXR::Memory::FastCopy(frame.data, payload, len);
+    }
+
     if (config_.auto_reply_version && IsVersionQuery(frame))
     {
       (void)SendFrame(VERSION_QUERY_TYPE, &config_.local_version, sizeof(config_.local_version));
@@ -1022,18 +899,18 @@ class LD6002 : public LibXR::Application
 
     Event event = {};
     DecodeFrame(frame, event);
-    RecordEvent(event);
+    const LibXR::MicrosecondTimestamp timestamp = LibXR::Timebase::GetMicroseconds();
+    PublishFrameAndEvent(frame, event, timestamp);
   }
 
   void FeedByte(uint8_t byte)
   {
     const auto now_us = LibXR::Timebase::GetMicroseconds();
-    last_rx_us_ = now_us;
     if ((state_ != ParserState::WAIT_SOF) &&
         (static_cast<uint64_t>(last_byte_us_) != 0U) &&
         ((now_us - last_byte_us_).ToMillisecond() > config_.parser_timeout_ms))
     {
-      ResetParserState();
+      ClearParserState();
     }
     last_byte_us_ = now_us;
 
@@ -1094,7 +971,7 @@ class LD6002 : public LibXR::Application
       case ParserState::READ_HEAD_CKSUM:
         if (ChecksumFinalize(header_cksum_) != byte)
         {
-          ResetParserState();
+          ClearParserState();
           return;
         }
 
@@ -1107,9 +984,9 @@ class LD6002 : public LibXR::Application
         {
           if (!discard_payload_)
           {
-            HandleFrame();
+            HandleFrame(current_id_, current_type_, current_len_, payload_frame_.data);
           }
-          ResetParserState();
+          ClearParserState();
           return;
         }
 
@@ -1132,14 +1009,27 @@ class LD6002 : public LibXR::Application
       case ParserState::READ_BODY_CKSUM:
         if ((ChecksumFinalize(body_cksum_) == byte) && !discard_payload_)
         {
-          HandleFrame();
+          HandleFrame(current_id_, current_type_, current_len_, payload_frame_.data);
         }
-        ResetParserState();
+        ClearParserState();
         return;
     }
   }
 
+  LibXR::UART& uart_;
   Config config_{};
+  LibXR::Thread worker_thread_;
+  LibXR::Topic frame_topic_;
+  LibXR::Topic event_topic_;
+  LibXR::Topic version_topic_;
+  LibXR::Topic text_topic_;
+  LibXR::Topic presence_topic_;
+  LibXR::Topic breath_rate_topic_;
+  LibXR::Topic heart_rate_topic_;
+  LibXR::Topic target_range_topic_;
+  LibXR::Topic track_position_topic_;
+  LibXR::Topic phase_test_topic_;
+  LibXR::Topic personnel_position_topic_;
   ParserState state_ = ParserState::WAIT_SOF;
   uint16_t next_id_ = 0;
   uint16_t current_id_ = 0;
@@ -1151,17 +1041,6 @@ class LD6002 : public LibXR::Application
   uint8_t header_cksum_ = 0;
   uint8_t body_cksum_ = 0;
   bool discard_payload_ = false;
-  bool has_last_frame_ = false;
-  bool has_last_event_ = false;
-  LibXR::MicrosecondTimestamp last_rx_us_{};
-  LibXR::MicrosecondTimestamp last_frame_us_{};
   LibXR::MicrosecondTimestamp last_byte_us_{};
   Frame payload_frame_ = {};
-  Frame last_frame_ = {};
-  Snapshot snapshot_ = {};
-  Event last_event_ = {};
-  Event event_queue_[kEventQueueCapacity] = {};
-  size_t event_queue_head_ = 0;
-  size_t event_queue_tail_ = 0;
-  size_t event_queue_size_ = 0;
 };
