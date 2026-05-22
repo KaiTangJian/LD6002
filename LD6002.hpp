@@ -1,7 +1,9 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: LD6002 radar driver
-constructor_args: []
+constructor_args:
+  - config:
+      expr: LD6002::Config{}
 template_args: []
 required_hardware:
   ld6002_uart
@@ -179,7 +181,20 @@ class LD6002
     Version local_version = {0, 1, 0, 0};
   };
 
-  LD6002(LibXR::HardwareContainer& hw, Config config = {})
+  LD6002(LibXR::HardwareContainer& hw) : LD6002(hw, Config{}) {}
+
+  LD6002(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& appmgr)
+      : LD6002(hw, appmgr, Config{})
+  {
+  }
+
+  LD6002(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& appmgr, Config config)
+      : LD6002(hw, config)
+  {
+    (void)appmgr;
+  }
+
+  explicit LD6002(LibXR::HardwareContainer& hw, Config config)
       : uart_(*hw.FindOrExit<LibXR::UART>({REQUIRED_UART_ALIAS})),
         config_(config),
         frame_topic_(LibXR::Topic::FindOrCreate<Frame>(FRAME_TOPIC_NAME, nullptr, false, false,
